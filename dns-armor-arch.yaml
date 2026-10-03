@@ -6,57 +6,41 @@ nodes:
   - {id: admin, type: onprem.client.Users, label: "Engineer\ngcloud CLI"}
 
 clusters:
-  - name: "Detection"
-    nodes:
-      - {id: iap,       type: gcp.security.IAP,          label: "Identity-Aware Proxy\nSSH tunnel"}
-      - {id: dns_armor, type: gcp.network.DNS,           label: "Cloud DNS Armor\n(Infoblox)"}
-      - {id: logging,   type: gcp.operations.Logging,    label: "Cloud Logging\n+ Log Router sink"}
-      - {id: monitoring,type: gcp.operations.Monitoring, label: "Cloud Monitoring\n3 alert policies → email"}
-
-  - name: "Blocking Pipeline"
-    nodes:
-      - {id: pubsub,   type: gcp.analytics.Pubsub, label: "Pub/Sub\ndns-armor-block-domain"}
-      - {id: function, type: gcp.compute.Run,       label: "Cloud Function Gen 2\ndns-armor-block-domain"}
-      - {id: gcs,      type: gcp.storage.GCS,       label: "GCS\nfunction source"}
-      - {id: build,    type: gcp.devtools.Build,    label: "Cloud Build"}
-
   - name: "VPC  ·  dns-armor-vpc  ·  10.10.0.0/29"
     nodes:
-      - {id: vm,  type: gcp.compute.ComputeEngine, label: "Test VM\ne2-micro · no public IP"}
-      - {id: nat, type: gcp.network.NAT,            label: "Cloud NAT"}
-      - {id: dns, type: gcp.network.DNS,            label: "Cloud DNS\n+ RPZ (0.0.0.0)"}
+      - {id: vm,  type: gcp.compute.ComputeEngine, label: "Test VM\ne2-micro"}
+      - {id: dns, type: gcp.network.DNS,            label: "Cloud DNS\n+ RPZ"}
+
+  - name: "Detection"
+    nodes:
+      - {id: dns_armor,  type: gcp.network.DNS,          label: "Cloud DNS Armor\n(Infoblox)"}
+      - {id: logging,    type: gcp.operations.Logging,   label: "Cloud Logging\n+ Log Router"}
+      - {id: monitoring, type: gcp.operations.Monitoring,label: "Cloud Monitoring\nalerts → email"}
+
+  - name: "Auto-Block Pipeline"
+    nodes:
+      - {id: pubsub,   type: gcp.analytics.Pubsub, label: "Pub/Sub"}
+      - {id: function, type: gcp.compute.Run,       label: "Cloud Function\nblock-domain"}
 
 edges:
-  # SSH via IAP
-  - {from: admin, to: iap,  kind: muted,   label: "SSH"}
-  - {from: iap,   to: vm,   kind: muted}
+  # SSH
+  - {from: admin, to: vm, kind: muted, label: "SSH (IAP)"}
 
-  # VM → DNS query
-  - {from: vm, to: dns, kind: request, label: "1. dig evil.com"}
+  # DNS query flow
+  - {from: vm, to: dns,      kind: request, label: "1. dig evil.com"}
+  - {from: vm, to: dns_armor,kind: request, label: "2. inspected by Armor"}
 
-  # DNS Armor inspects queries
-  - {from: vm,        to: dns_armor, kind: request, label: "2. query inspected"}
-  - {from: dns_armor, to: logging,   kind: data,    label: "3. threat finding (HIGH/MEDIUM)"}
+  # Detection → pipeline
+  - {from: dns_armor, to: logging, kind: data,    label: "3. threat finding"}
+  - {from: logging,   to: pubsub,  kind: data,    label: "4. Log Router sink"}
+  - {from: pubsub,    to: function,kind: request, label: "5. trigger"}
+  - {from: function,  to: dns,     kind: request, label: "6. add RPZ rule"}
 
-  # Log Router → Pub/Sub
-  - {from: logging, to: pubsub, kind: data, label: "4. Log Router sink"}
+  # Blocked response
+  - {from: dns, to: vm, kind: data, label: "7. blocked → 0.0.0.0"}
 
-  # Manual block path
+  # Manual path
   - {from: admin, to: pubsub, kind: muted, label: "manual block/unblock"}
-
-  # Function triggered
-  - {from: pubsub,   to: function, kind: request, label: "5. trigger"}
-  - {from: function, to: dns,      kind: request, label: "6. add RPZ rule"}
-
-  # RPZ sinkhole response
-  - {from: dns, to: vm, kind: data, label: "7. future queries → 0.0.0.0"}
 
   # Monitoring
   - {from: logging, to: monitoring, kind: muted, label: "alerts"}
-
-  # Build pipeline
-  - {from: gcs,   to: build,    kind: muted}
-  - {from: build, to: function, kind: muted, label: "deploy"}
-
-  # Outbound NAT
-  - {from: vm, to: nat, kind: muted, label: "outbound"}

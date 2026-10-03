@@ -26,12 +26,35 @@ resource "google_dns_response_policy" "rpz" {
   response_policy_name = "dns-armor-rpz"
   description          = "Sinkhole policy — matched domains resolve to 0.0.0.0"
 
-  # Attach to the VPC so every VM in this network uses this policy
   networks {
     network_url = google_compute_network.vpc.self_link
   }
 
   depends_on = [google_project_service.apis]
+}
+
+# Purge all RPZ rules (including dynamically added ones) before destroying
+# the policy. Without this, destroy fails with "containerNotEmpty" because
+# rules added at runtime by the Cloud Function are not in Terraform state.
+resource "terraform_data" "rpz_cleanup" {
+  # Store everything needed at destroy time in triggers_replace —
+  # destroy provisioners can only reference self, not var.*
+  triggers_replace = {
+    policy_name = google_dns_response_policy.rpz.response_policy_name
+    project_id  = var.project_id
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      for rule in $(gcloud dns response-policies rules list ${self.triggers_replace.policy_name} \
+        --project=${self.triggers_replace.project_id} --format="value(ruleName)" 2>/dev/null); do
+        gcloud dns response-policies rules delete "$rule" \
+          --response-policy=${self.triggers_replace.policy_name} \
+          --project=${self.triggers_replace.project_id} --quiet
+      done
+    EOT
+  }
 }
 
 # --------------------------------------------------------------------------

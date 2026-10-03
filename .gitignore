@@ -23,3 +23,6 @@ terraform.tfvars
 .idea/
 .vscode/
 *.swp
+*.png
+*.drawio
+*-arch.yaml
